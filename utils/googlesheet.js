@@ -1,20 +1,18 @@
-import { GoogleSpreadsheet } from "google-spreadsheet";
+﻿import { GoogleSpreadsheet } from "google-spreadsheet";
 import { JWT } from "google-auth-library";
 
+const sheetId = (process.env.GOOGLE_SHEET_ID || "").trim();
 console.log("EMAIL:", process.env.GOOGLE_CLIENT_EMAIL);
-console.log("SHEET ID:", process.env.GOOGLE_SHEET_ID);
+console.log("SHEET ID:", sheetId);
 console.log("PRIVATE KEY EXISTS:", !process.env.GOOGLE_PRIVATE_KEY);
 
 const serviceAccountAuth = new JWT({
-  email: process.env.GOOGLE_CLIENT_EMAIL,
+  email: (process.env.GOOGLE_CLIENT_EMAIL || "").trim(),
   key: (process.env.GOOGLE_PRIVATE_KEY || "").replace(/\\n/g, "\n"),
   scopes: ["https://www.googleapis.com/auth/spreadsheets"],
 });
 
-const doc = new GoogleSpreadsheet(
-  process.env.GOOGLE_SHEET_ID,
-  serviceAccountAuth
-);
+const doc = new GoogleSpreadsheet(sheetId, serviceAccountAuth);
 
 export const formatServiceItems = (items) => {
   if (!Array.isArray(items) || items.length === 0) return "";
@@ -144,10 +142,14 @@ export const extractInvoiceFields = (invoice) => {
   };
 };
 
+const getTargetSheet = async () => {
+  await doc.loadInfo();
+  return doc.sheetsByTitle["Sheet2"] || doc.sheetsByIndex[1] || doc.sheetsByIndex[0];
+};
+
 export const updateInvoiceInSheet = async (invoice, oldInvoiceNumber) => {
   try {
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0];
+    const sheet = await getTargetSheet();
     await ensureSheetHeaders(sheet);
 
     const rows = await sheet.getRows();
@@ -182,15 +184,13 @@ export const updateInvoiceInSheet = async (invoice, oldInvoiceNumber) => {
 };
 
 export const appendInvoiceToSheet = async (invoice) => {
-  // Use updateInvoiceInSheet so existing rows are updated and new rows are appended safely
   return updateInvoiceInSheet(invoice);
 };
 
 export const deleteInvoiceFromSheet = async (invoiceNumber) => {
   try {
     if (!invoiceNumber) return;
-    await doc.loadInfo();
-    const sheet = doc.sheetsByIndex[0];
+    const sheet = await getTargetSheet();
     const rows = await sheet.getRows();
     const targetInvNum = String(invoiceNumber || "").trim();
 
@@ -204,5 +204,21 @@ export const deleteInvoiceFromSheet = async (invoiceNumber) => {
     }
   } catch (error) {
     console.error("Error deleting invoice from Google Sheet:", error);
+  }
+};
+
+export const bulkSyncInvoicesToSheet = async (invoices) => {
+  try {
+    const sheet = await getTargetSheet();
+    await ensureSheetHeaders(sheet);
+    await sheet.clearRows();
+
+    const formattedRows = invoices.map((inv) => extractInvoiceFields(inv));
+    await sheet.addRows(formattedRows);
+    console.log(`Bulk synced ${formattedRows.length} invoices into Google Sheet`);
+    return { success: true, count: formattedRows.length };
+  } catch (error) {
+    console.error("Error bulk syncing invoices to Google Sheet:", error);
+    throw error;
   }
 };
